@@ -1,0 +1,46 @@
+---
+title: "Convergence in lme4 and lme4.0"
+author: "Phillip Alday"
+date: "16 May 2014"
+output: html_document
+---
+
+```{r}
+library(knitcitations)
+```
+
+The differences in convergence between "old" and "new" `lme4` is well known and often leads to substantially poorer fits with new lme4 for psycholinguistic datasets `r citep("https://hlplab.wordpress.com/2014/03/17/old-and-new-lme4/")`. For the data set here, the difference in fits leads to similar estimates but very different standard errors and thus $t$-values. 
+
+The following was done using lme4 v1.1-6 and lme4.0 v0.999999-3.
+
+```{r}
+library(lme4)
+library(lme4.0)
+
+c. <- function(x) scale(x, center=TRUE, scale=FALSE)
+reml <- FALSE
+
+modeldata <- read.table("data.tab",header=T,
+                        colClasses=c(mean="numeric",subj="factor",item="factor",
+                                     roi="factor",win="factor",
+                                     sdiff="numeric", dist="numeric",signdist="numeric",ambiguity="factor"))
+
+modeldata <- subset(modeldata, roi == 'Left-Posterior')
+modeldata.n400 <- subset(modeldata,win=="N400")
+```
+
+# lme4
+
+```{r}
+sdiff.new <- lme4::lmer(mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) + (1+c.(sdiff)|subj), data=modeldata.n400, REML=reml)
+summary(sdiff.new)
+```
+
+# lme4.0
+```{r}
+sdiff.old <- lme4.0::lmer(mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) + (1+c.(sdiff)|subj), data=modeldata.n400, REML=reml)
+summary(sdiff.old)
+```
+
+The code and data for this example can be found on [GitHub](https://github.com/palday/lme4-convergence)
+
