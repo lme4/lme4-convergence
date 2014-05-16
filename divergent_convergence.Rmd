@@ -1,46 +1,150 @@
 ---
 title: "Convergence in lme4 and lme4.0"
 author: "Phillip Alday"
-date: "16 May 2014"
+date: `r as.character(Sys.time())`
 output: html_document
 ---
 
-```{r}
+```{r pkgs,message=FALSE}
 library(knitcitations)
+library(RCurl)
+library(lme4)
+library(lme4.0)
+lme4ver <- as.character(packageVersion("lme4"))
+lme4.0ver <- as.character(packageVersion("lme4.0"))
+```
+
+```{r opts,echo=FALSE}
+opts_chunk$set(tidy=FALSE)
 ```
 
 The differences in convergence between "old" and "new" `lme4` is well known and often leads to substantially poorer fits with new lme4 for psycholinguistic datasets `r citep("https://hlplab.wordpress.com/2014/03/17/old-and-new-lme4/")`. For the data set here, the difference in fits leads to similar estimates but very different standard errors and thus $t$-values. 
 
-The following was done using lme4 v1.1-6 and lme4.0 v0.999999-3.
+The following was done using lme4 `r lme4ver` and lme4.0 `r lme4.0ver`.
 
-```{r}
-library(lme4)
-library(lme4.0)
-
+```{r setup}
 c. <- function(x) scale(x, center=TRUE, scale=FALSE)
 reml <- FALSE
-
-modeldata <- read.table("data.tab",header=T,
-                        colClasses=c(mean="numeric",subj="factor",item="factor",
-                                     roi="factor",win="factor",
-                                     sdiff="numeric", dist="numeric",signdist="numeric",ambiguity="factor"))
+modeldata <- read.table("data.tab",header=TRUE,
+                        colClasses=c(mean="numeric",
+                        subj="factor",item="factor",
+                        roi="factor",win="factor",
+                        sdiff="numeric", dist="numeric",
+                        signdist="numeric",ambiguity="factor"))
 
 modeldata <- subset(modeldata, roi == 'Left-Posterior')
 modeldata.n400 <- subset(modeldata,win=="N400")
+form <- mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) +
+    (1+c.(sdiff)|subj)
+```
+
+## Plots
+
+(Haven't found a great way to do this, just trying to look
+to see whether there is something odd about the data ...)
+
+```{r pix}
+library(ggplot2); theme_set(theme_bw())
+mm <- transform(modeldata.n400,sdiff=c.(sdiff),
+                subj=reorder(subj,mean),
+                item=reorder(item,mean))
+ggplot(mm,aes(mean,subj,colour=c.(sdiff)))+geom_point(alpha=0.5)+
+    facet_grid(ambiguity~.)
 ```
 
 # lme4
 
-```{r}
-sdiff.new <- lme4::lmer(mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) + (1+c.(sdiff)|subj), data=modeldata.n400, REML=reml)
-summary(sdiff.new)
+```{r lme4fitnew,cache=TRUE}
+t.new <- system.time(sdiff.new <- lme4::lmer(form,
+                                             data=modeldata.n400, REML=reml))
+t.new
+print(summary(sdiff.new),correlation=FALSE)
 ```
+Note we still get convergence warnings, even with lme4 `r lme4ver`; this means they are probably **not** just false positives (so in this case they are a good thing!)
 
 # lme4.0
-```{r}
-sdiff.old <- lme4.0::lmer(mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) + (1+c.(sdiff)|subj), data=modeldata.n400, REML=reml)
+```{r lme4fitold,cache=TRUE}
+t.old <- system.time(sdiff.old <- lme4.0::lmer(form,
+                                               data=modeldata.n400, REML=reml))
+t.old
 summary(sdiff.old)
 ```
 
+As stated, the important difference in the fixed effects is the
+size of the standard error in `c.(sdiff)` ...
+
+```{r coefplot,echo=FALSE}
+tf <- function(x,model="") {
+    x2 <- as.data.frame(coef(summary(x)))
+    x2$var <- rownames(x2)
+    rownames(x2) <- NULL
+    x2 <- x2[-1,c(4,1,2)]
+    names(x2) <- c("var","est","stder")
+    data.frame(model,x2)
+}
+cc <- rbind(tf(sdiff.new,"new"),tf(sdiff.old,"old"))
+ggplot(cc,aes(x=model,y=est,ymin=est-2*stder,ymax=est+2*stder,
+        colour=model))+geom_pointrange()+
+    facet_wrap(~var,scale="free")
+```
+
+Compare theta values? (We can't get confidence intervals without
+profiling ...)
+
+
+# lme4 starting from lme4.0 results
+```{r lme4fitstart,cache=TRUE}
+oldtheta <- getME(sdiff.old,"theta")
+newtheta <- lme4::getME(sdiff.new,"theta")
+sdiff.oldstart <- lme4::lmer(form,
+                             data=modeldata.n400, REML=reml,
+                             start=list(theta=getME(sdiff.old,"theta")))
+sdiff.oldstart.nlminb <- lme4::lmer(form,
+                             data=modeldata.n400, REML=reml,
+                             start=list(theta=getME(sdiff.old,"theta")),
+                             control=lmerControl(optimizer="optimx",
+                             optCtrl=list(method="nlminb")))
+```
+
+We have an interesting problem here.  New `lme4` calculates the
+deviance slightly differently; at $\hat \theta_{\textrm{old}}$
+it computes a deviance value about 29 units higher than `lme4.0`.
+If we start `lme4` from that point, we actually get a **worse**
+result (the deviance goes up by about 480 units!) --- presumably
+we get thrown off by the initial displacement of the points from
+the starting value ...
+
+```{r cmpdevs}
+sdiff.newdev <- update(sdiff.new,devFunOnly=TRUE)
+devvec <- c(old=deviance(sdiff.old),new=deviance(sdiff.new),
+            oldtheta.newdev=sdiff.newdev(oldtheta),
+            oldstart=deviance(sdiff.oldstart),
+            oldstart.nlminb=deviance(sdiff.oldstart.nlminb))
+print(sort(devvec-min(devvec)),digits=3)
+```
+
+
+```{r get_allfit}
+afurl <- paste0("https://raw.githubusercontent.com/lme4/",
+                 "lme4/master/misc/issues/allFit.R")
+eval(parse(text=getURL(afurl)))
+```
+
+I should suppress the warnings here (they'll be preserved in the `@optinfo` slot anyway), but that will require refreshing the cache, so I'm not going to do it right now ...)  The second `allFit` call (starting from the `lme4.0` fitted values) doesn't work at all, for some structural reason I don't understand (having to do with package loading/unloading I think).  All of this is sufficiently lengthy that I should consider putting it in a batch file rather than relying on knitr caching ...
+
+```{r comp_allfit,warning=FALSE,message=FALSE,cache=TRUE}
+detach("package:lme4.0")
+t.all <- system.time(sdiff.new.all <- allFit(sdiff.new))
+sdiff.oldstart.all <- allFit(sdiff.oldstart)
+library(lme4.0)
+```
+
+The bottom line is that trying lots of different optimizers doesn't do us any good in this case. Oddly enough, our Nelder-Mead implementation (which we have found to be generally less reliable than BOBYQA for big problems) turns out to do *best* of all the options (other than `lme4.0`) in this case ...
+
+```{r cmplik}
+is.OK <- !sapply(sdiff.new.all,inherits,"error")
+all.dev <- c(sapply(sdiff.new.all[is.OK],deviance),lme4.0=deviance(sdiff.old))
+print(sort(all.dev-min(all.dev)),digits=4)
+```
 The code and data for this example can be found on [GitHub](https://github.com/palday/lme4-convergence)
 
