@@ -24,6 +24,7 @@ The following was done using lme4 `r lme4ver` and lme4.0 `r lme4.0ver`.
 
 ```{r setup}
 c. <- function(x) scale(x, center=TRUE, scale=FALSE)
+cs. <- function(x) scale(x, center=TRUE, scale=TRUE)
 reml <- FALSE
 modeldata <- read.table("data.tab",header=TRUE,
                         colClasses=c(mean="numeric",
@@ -36,6 +37,8 @@ modeldata <- subset(modeldata, roi == 'Left-Posterior')
 modeldata.n400 <- subset(modeldata,win=="N400")
 form <- mean ~ ambiguity * c.(sdiff) + (1+c.(sdiff)|item) +
     (1+c.(sdiff)|subj)
+form.s <- mean ~ ambiguity * cs.(sdiff) + (1+cs.(sdiff)|item) +
+    (1+cs.(sdiff)|subj)
 ```
 
 ## Plots
@@ -45,10 +48,13 @@ to see whether there is something odd about the data ...)
 
 ```{r pix}
 library(ggplot2); theme_set(theme_bw())
-mm <- transform(modeldata.n400,sdiff=c.(sdiff),
+mm <- transform(modeldata.n400,sdiff=cs.(sdiff),
                 subj=reorder(subj,mean),
                 item=reorder(item,mean))
-ggplot(mm,aes(mean,subj,colour=c.(sdiff)))+geom_point(alpha=0.5)+
+mm0 <- subset(mm,select=c(mean,sdiff,ambiguity,subj,item))
+## save("mm0",file="mm0.RData")
+## L <- load("mm0.RData")
+ggplot(mm0,aes(mean,subj,colour=sdiff))+geom_point(alpha=0.5)+
     facet_grid(ambiguity~.)
 ```
 
@@ -60,7 +66,11 @@ t.new <- system.time(sdiff.new <- lme4::lmer(form,
 t.new
 print(summary(sdiff.new),correlation=FALSE)
 ```
-Note we still get convergence warnings, even with lme4 `r lme4ver`; this means they are probably **not** just false positives (so in this case they are a good thing!)
+Note we still get convergence warnings, even with lme4 `r lme4ver`; this means they are probably **not** just false positives (so in this case they are a good thing!)  Should have gotten scaling warnings too ???
+
+```{r lme4fitnew.S,cache=TRUE}
+sdiff.new.scaled <- update(sdiff.new,formula=form.s)
+```
 
 # lme4.0
 ```{r lme4fitold,cache=TRUE}
@@ -146,5 +156,13 @@ is.OK <- !sapply(sdiff.new.all,inherits,"error")
 all.dev <- c(sapply(sdiff.new.all[is.OK],deviance),lme4.0=deviance(sdiff.old))
 print(sort(all.dev-min(all.dev)),digits=4)
 ```
+
+Now try with scaled data:
+```{r comp_allfit_scaled,warning=FALSE,message=FALSE,cache=TRUE}
+detach("package:lme4.0")
+t.all <- system.time(sdiff.new.scaled.all <- allFit(sdiff.new.scaled))
+library(lme4.0)
+```
+
 The code and data for this example can be found on [GitHub](https://github.com/palday/lme4-convergence)
 
